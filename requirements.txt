@@ -5,3 +5,4 @@ pandas
 pandas-ta
 streamlit-lightweight-charts
 logzero
+websocket-client
