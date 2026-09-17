@@ -4,3 +4,4 @@ pyotp
 pandas
 pandas-ta
 streamlit-lightweight-charts
+logzero
