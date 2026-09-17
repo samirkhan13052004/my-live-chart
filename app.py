@@ -12,7 +12,7 @@ st.set_page_config(layout="wide", page_title="My Custom Trading Platform")
 if "smart_api" not in st.session_state:
     st.session_state.smart_api = None
 
-# --- 1. लॉगिन फॉर्म ---
+# --- 1. सुरक्षित लॉगिन फॉर्म (स्पेस हटाने वाले फिक्स के साथ) ---
 st.sidebar.title("Angel One Login")
 with st.sidebar.form("login_form"):
     api_key = st.text_input("API Key", type="password")
@@ -23,23 +23,29 @@ with st.sidebar.form("login_form"):
     submit_btn = st.form_submit_button("Connect API")
     
     if submit_btn:
-        if api_key and client_code and pin and totp_secret:
+        # इनपुट से किसी भी एक्स्ट्रा स्पेस (white space) को साफ करना
+        clean_api = api_key.strip() if api_key else ""
+        clean_client = client_code.strip() if client_code else ""
+        clean_pin = pin.strip() if pin else ""
+        clean_totp = totp_secret.strip() if totp_secret else ""
+
+        if clean_api and clean_client and clean_pin and clean_totp:
             try:
-                smart_api = SmartConnect(api_key)
-                totp_val = pyotp.TOTP(totp_secret).now()
-                login_data = smart_api.generateSession(client_code, pin, totp_val)
+                smart_api = SmartConnect(clean_api)
+                totp_val = pyotp.TOTP(clean_totp).now()
+                login_data = smart_api.generateSession(clean_client, clean_pin, totp_val)
                 
-                if login_data['status']:
+                if login_data and login_data.get('status'):
                     st.session_state.smart_api = smart_api
                     st.sidebar.success("सफलतापूर्वक कनेक्ट हो गया!")
                 else:
-                    st.sidebar.error(f"लॉगिन विफल: {login_data['message']}")
+                    st.sidebar.error(f"लॉगिन विफल: {login_data.get('message')}")
             except Exception as e:
                 st.sidebar.error(f"लॉगिन एरर: {e}")
         else:
             st.sidebar.warning("कृपया सभी क्रेडेंशियल्स भरें।")
 
-# --- 2. मुख्य स्क्रीन ---
+# --- 2. मुख्य स्क्रीन (चार्ट और डेटा) ---
 if st.session_state.smart_api:
     st.title("Live Nifty / BankNifty Chart")
     
@@ -48,9 +54,13 @@ if st.session_state.smart_api:
         token = st.text_input("Symbol Token", value="3045")
         exchange = st.selectbox("Exchange", ["NSE", "NFO", "BSE"])
         interval = st.selectbox("Timeframe", ["ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE"])
+        
+        # मैन्युअल रिफ्रेश का बटन (ऑटो-रिफ्रेश के बैकअप के लिए)
+        if st.button("चार्ट रिफ्रेश करें"):
+            st.rerun()
 
     try:
-        # [सुधार 1] भारत का समय (IST) फिक्स करना
+        # भारत का समय (IST) फिक्स करना
         now_ist = pd.Timestamp.now(tz='Asia/Kolkata')
         from_date = (now_ist - pd.Timedelta(days=3)).strftime("%Y-%m-%d 09:15")
         to_date = now_ist.strftime("%Y-%m-%d %H:%M")
@@ -63,11 +73,14 @@ if st.session_state.smart_api:
             "todate": to_date
         })
 
-        # [सुधार 2] सही डेटा की जांच
+        # सही डेटा की जांच
         if hist_data and hist_data.get('status') and hist_data.get('data'):
             df = pd.DataFrame(hist_data['data'], columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+            
+            # टाइमस्टैम्प को TradingView के फॉर्मेट (Unix) में बदलना
             df['time'] = pd.to_datetime(df['time']).astype('int64') // 10**9 + 19800
             
+            # कस्टम इंडिकेटर (EMA 20)
             df['ema_20'] = ta.ema(df['close'], length=20)
 
             candles = df[['time', 'open', 'high', 'low', 'close']].to_dict('records')
@@ -88,14 +101,14 @@ if st.session_state.smart_api:
             with col2:
                 renderLightweightCharts([{"chart": chart_options, "series": series}], 'live_chart')
 
-            # रिफ्रेश रेट को 3 की जगह 10 सेकंड कर दिया ताकि चार्ट रेंडर होने का समय मिले
+            # चार्ट को लोड होने का समय देने के लिए 10 सेकंड का डिले
             time.sleep(10)
             st.rerun()
 
         else:
-            # [सुधार 3] असली एरर को स्क्रीन पर दिखाना
+            # असली एरर को स्क्रीन पर दिखाना
             st.warning("चार्ट लोड नहीं हो सका।")
-            st.info("Angel One सर्वर का जवाब नीचे देखें (कृपया मुझे बताएं कि यहाँ क्या लिखा आ रहा है):")
+            st.info("Angel One सर्वर का जवाब नीचे देखें:")
             st.write(hist_data) 
             
     except Exception as e:
