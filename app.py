@@ -9,11 +9,10 @@ import time
 # पेज की सेटिंग
 st.set_page_config(layout="wide", page_title="My Custom Trading Platform")
 
-# सेशन स्टेट में API ऑब्जेक्ट सुरक्षित रखना ताकि बार-बार लॉगिन न हो
 if "smart_api" not in st.session_state:
     st.session_state.smart_api = None
 
-# --- 1. साइडबार में सुरक्षित लॉगिन फॉर्म ---
+# --- 1. लॉगिन फॉर्म ---
 st.sidebar.title("Angel One Login")
 with st.sidebar.form("login_form"):
     api_key = st.text_input("API Key", type="password")
@@ -26,7 +25,6 @@ with st.sidebar.form("login_form"):
     if submit_btn:
         if api_key and client_code and pin and totp_secret:
             try:
-                # API लॉगिन लॉजिक
                 smart_api = SmartConnect(api_key)
                 totp_val = pyotp.TOTP(totp_secret).now()
                 login_data = smart_api.generateSession(client_code, pin, totp_val)
@@ -41,11 +39,10 @@ with st.sidebar.form("login_form"):
         else:
             st.sidebar.warning("कृपया सभी क्रेडेंशियल्स भरें।")
 
-# --- 2. मुख्य स्क्रीन (चार्ट और डेटा) ---
+# --- 2. मुख्य स्क्रीन ---
 if st.session_state.smart_api:
     st.title("Live Nifty / BankNifty Chart")
     
-    # यूजर से टोकन लेना (डिफ़ॉल्ट 3045 SBI का है, निफ्टी के लिए 99926000)
     col1, col2 = st.columns([1, 4])
     with col1:
         token = st.text_input("Symbol Token", value="3045")
@@ -53,29 +50,29 @@ if st.session_state.smart_api:
         interval = st.selectbox("Timeframe", ["ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE"])
 
     try:
-        # डेटा फेच करना
+        # [सुधार 1] भारत का समय (IST) फिक्स करना
+        now_ist = pd.Timestamp.now(tz='Asia/Kolkata')
+        from_date = (now_ist - pd.Timedelta(days=3)).strftime("%Y-%m-%d 09:15")
+        to_date = now_ist.strftime("%Y-%m-%d %H:%M")
+
         hist_data = st.session_state.smart_api.getCandleData({
             "exchange": exchange,
             "symboltoken": token,
             "interval": interval,
-            "fromdate": (pd.Timestamp.now() - pd.Timedelta(days=3)).strftime("%Y-%m-%d 09:15"),
-            "todate": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+            "fromdate": from_date,
+            "todate": to_date
         })
 
-        if hist_data and hist_data.get('data'):
-            # डेटा को Pandas DataFrame में बदलना
+        # [सुधार 2] सही डेटा की जांच
+        if hist_data and hist_data.get('status') and hist_data.get('data'):
             df = pd.DataFrame(hist_data['data'], columns=['time', 'open', 'high', 'low', 'close', 'volume'])
-            df['time'] = pd.to_datetime(df['time']).astype('int64') // 10**9 + 19800  # IST Timezone
+            df['time'] = pd.to_datetime(df['time']).astype('int64') // 10**9 + 19800
             
-            # --- 3. आपका कस्टम इंडिकेटर (Pine Script लॉजिक यहाँ डालें) ---
-            # उदाहरण: 20 Period EMA
             df['ema_20'] = ta.ema(df['close'], length=20)
 
-            # चार्ट के लिए डेटा तैयार करना
             candles = df[['time', 'open', 'high', 'low', 'close']].to_dict('records')
             indicator_data = df[['time', 'ema_20']].dropna().rename(columns={'ema_20': 'value'}).to_dict('records')
 
-            # --- 4. TradingView (Lightweight) चार्ट की डिज़ाइन ---
             chart_options = {
                 "height": 550,
                 "layout": {"background": {"color": "#131722"}, "textColor": "#d1d4dc"},
@@ -84,29 +81,22 @@ if st.session_state.smart_api:
             }
 
             series = [
-                {
-                    "type": "Candlestick",
-                    "data": candles,
-                    "options": {"upColor": "#089981", "downColor": "#f23645", "borderVisible": False}
-                },
-                {
-                    "type": "Line",
-                    "data": indicator_data,
-                    "options": {"color": "#2962FF", "lineWidth": 2, "title": "EMA 20"}
-                }
+                {"type": "Candlestick", "data": candles, "options": {"upColor": "#089981", "downColor": "#f23645", "borderVisible": False}},
+                {"type": "Line", "data": indicator_data, "options": {"color": "#2962FF", "lineWidth": 2, "title": "EMA 20"}}
             ]
 
-            # चार्ट रेंडर करना
             with col2:
                 renderLightweightCharts([{"chart": chart_options, "series": series}], 'live_chart')
 
-            # --- 5. लाइव अपडेट (Auto-Refresh) ---
-            # हर 3 सेकंड में पेज रीफ्रेश होगा ताकि नई कैंडल/प्राइस अपडेट हो सके
-            time.sleep(3)
+            # रिफ्रेश रेट को 3 की जगह 10 सेकंड कर दिया ताकि चार्ट रेंडर होने का समय मिले
+            time.sleep(10)
             st.rerun()
 
         else:
-            st.warning("बाज़ार बंद है या टोकन गलत है।")
+            # [सुधार 3] असली एरर को स्क्रीन पर दिखाना
+            st.warning("चार्ट लोड नहीं हो सका।")
+            st.info("Angel One सर्वर का जवाब नीचे देखें (कृपया मुझे बताएं कि यहाँ क्या लिखा आ रहा है):")
+            st.write(hist_data) 
             
     except Exception as e:
         st.error(f"डेटा लाने में समस्या: {e}")
